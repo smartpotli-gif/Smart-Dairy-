@@ -1,0 +1,40 @@
+name: Build APK
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find project folder
+        run: |
+          shopt -s dotglob
+          if [ ! -f pubspec.yaml ]; then
+            d=$(dirname "$(find . -maxdepth 4 -name pubspec.yaml -not -path './.git/*' | head -1)")
+            echo "Project found in: $d"
+            cp -r "$d"/. .
+          fi
+          ls
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+      - name: Create Android scaffolding (keeps our files)
+        run: flutter create --platforms=android --org com.smartpotli --project-name smart_diary .
+      - name: Enable desugaring
+        run: python3 tool/patch_android.py
+      - name: Use fixed signing key (so updates keep your data)
+        run: mkdir -p ~/.android && cp tool/debug.keystore ~/.android/debug.keystore
+      - run: flutter pub get
+      - name: Build release APK
+        run: flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmartDiary-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
