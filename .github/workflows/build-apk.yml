@@ -3,6 +3,8 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,9 +30,40 @@ jobs:
       - name: Create Android scaffolding (keeps our files)
         run: flutter create --platforms=android --org com.smartpotli --project-name smart_diary .
       - name: Enable desugaring
-        run: python3 tool/patch_android.py
-      - name: Use fixed signing key (so updates keep your data)
-        run: mkdir -p ~/.android && cp tool/debug.keystore ~/.android/debug.keystore
+        run: |
+          python3 - <<'PY'
+          import os, re
+          for name in ["android/app/build.gradle", "android/app/build.gradle.kts"]:
+              if not os.path.exists(name):
+                  continue
+              s = open(name).read()
+              if "desugar" in s.lower():
+                  break
+              kts = name.endswith(".kts")
+              flag = "isCoreLibraryDesugaringEnabled = true" if kts else "coreLibraryDesugaringEnabled true"
+              s = re.sub(r"compileOptions\s*\{", "compileOptions {\n        " + flag, s, count=1)
+              dep = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")' if kts else "coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'"
+              s += "\ndependencies {\n    " + dep + "\n}\n"
+              open(name, "w").write(s)
+              print("patched", name)
+              break
+          PY
+      - name: Signing key (created once, saved in repo)
+        run: |
+          mkdir -p ~/.android
+          if [ -f tool/debug.keystore ]; then
+            cp tool/debug.keystore ~/.android/debug.keystore
+          elif [ -f signing/debug.keystore ]; then
+            cp signing/debug.keystore ~/.android/debug.keystore
+          else
+            mkdir -p signing
+            keytool -genkeypair -keystore signing/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Smart Diary,O=Smart Potli,C=IN"
+            cp signing/debug.keystore ~/.android/debug.keystore
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add signing/debug.keystore
+            git commit -m "Save signing key" && git push || echo "could not save key"
+          fi
       - run: flutter pub get
       - name: Build release APK
         run: flutter build apk --release
