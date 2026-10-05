@@ -10,15 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Find project folder
+      - name: Unpack project zip
         run: |
-          shopt -s dotglob
-          if [ ! -f pubspec.yaml ]; then
-            d=$(dirname "$(find . -maxdepth 4 -name pubspec.yaml -not -path './.git/*' | head -1)")
-            echo "Project found in: $d"
-            cp -r "$d"/. .
-          fi
-          ls
+          z=$(find . -maxdepth 3 -name "smart_diary_flutter*.zip" -not -path './.git/*' | head -1)
+          if [ -z "$z" ]; then echo "ZIP NOT FOUND - upload smart_diary_flutter.zip"; exit 1; fi
+          echo "Using $z"
+          unzip -o "$z" -d .
+          ls; ls lib
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -30,39 +28,14 @@ jobs:
       - name: Create Android scaffolding (keeps our files)
         run: flutter create --platforms=android --org com.smartpotli --project-name smart_diary .
       - name: Enable desugaring
-        run: |
-          python3 - <<'PY'
-          import os, re
-          for name in ["android/app/build.gradle", "android/app/build.gradle.kts"]:
-              if not os.path.exists(name):
-                  continue
-              s = open(name).read()
-              if "desugar" in s.lower():
-                  break
-              kts = name.endswith(".kts")
-              flag = "isCoreLibraryDesugaringEnabled = true" if kts else "coreLibraryDesugaringEnabled true"
-              s = re.sub(r"compileOptions\s*\{", "compileOptions {\n        " + flag, s, count=1)
-              dep = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")' if kts else "coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'"
-              s += "\ndependencies {\n    " + dep + "\n}\n"
-              open(name, "w").write(s)
-              print("patched", name)
-              break
-          PY
-      - name: Signing key (created once, saved in repo)
+        run: python3 tool/patch_android.py
+      - name: Signing key (fixed, so updates keep data)
         run: |
           mkdir -p ~/.android
-          if [ -f tool/debug.keystore ]; then
-            cp tool/debug.keystore ~/.android/debug.keystore
-          elif [ -f signing/debug.keystore ]; then
+          if [ -f signing/debug.keystore ]; then
             cp signing/debug.keystore ~/.android/debug.keystore
           else
-            mkdir -p signing
-            keytool -genkeypair -keystore signing/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Smart Diary,O=Smart Potli,C=IN"
-            cp signing/debug.keystore ~/.android/debug.keystore
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git add signing/debug.keystore
-            git commit -m "Save signing key" && git push || echo "could not save key"
+            cp tool/debug.keystore ~/.android/debug.keystore
           fi
       - run: flutter pub get
       - name: Build release APK
